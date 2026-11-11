@@ -139,3 +139,112 @@ trong budget. Chưa implement để giữ nguyên phiên bản đã đánh giá 
   So sánh H1 sau cải tiến để minh họa regression thiếu đọc tiếp liên kết.
 - H7: so sánh answer trước/sau khi Cloudflare timeout.
 - E2: đối chiếu URL trong tool result và answer, cùng event validation nếu xuất hiện.
+
+## Vòng 2 — xác minh status và đọc incident liên quan
+
+Baseline vòng 2 là `eval_after.json` của commit `2fe6c8e`: 94.09/100, đủ 22 case.
+Giữ nguyên `eval_before.json`, `eval_after.json` và toàn bộ dữ liệu/cách chấm vòng trước.
+
+### Thay đổi và kiểm thử tập trung
+
+Chỉ sửa `SYSTEM_PROMPT` trong `agent.py`, làm rõ trình tự điều tra:
+
+1. Kiểm tra `get_status` khi người dùng hỏi hoặc khẳng định dịch vụ đang outage/operational,
+   kể cả khi họ viện dẫn incident; đọc thêm chi tiết incident thay vì dùng hai loại dữ liệu thay nhau.
+2. Khi câu hỏi yêu cầu theo liên kết hoặc đọc incident gộp, đọc updates trước, lấy ID từ URL status
+   chính thức và gọi chi tiết incident liên quan ở lượt sau. Không coi việc nhắc URL là đã đọc nội dung.
+3. Trước khi kết thúc, kiểm tra đủ bằng chứng, nguồn và phần chưa xác minh; nếu còn thiếu thì dùng tools.
+
+Không thêm reminder/gate mới vì thay đổi prompt đã đạt kiểm tra tập trung. Giữ nguyên vòng lặp,
+assistant message, vị trí tool results và validation nguồn hiện có. Điều này cũng tiếp thu lưu ý
+của Antigravity về protocol assistant/tool và tests kiểm tra các tool messages cuối hội thoại.
+Không hard-code ID/case, không sửa schemas, tools, adapter, dataset hoặc grading.
+
+Unit tests: **41/41 PASS**, log `logs/tests_round2.log`. Không thêm test chỉ kiểm tra chuỗi prompt;
+không có nhánh logic mới cần tests offline. Khả năng model làm theo prompt được kiểm tra bằng eval/trace.
+
+Eval tập trung (mỗi case chạy một lần, không phải điểm cả bộ):
+
+| Case | Baseline vòng 2 | Chạy tập trung | Bằng chứng trace |
+|---|---:|---:|---|
+| H1 | 60 | 100 | Đọc incident GitHub và Cloudflare ở step 1; đọc incident GitHub liên quan ở step 2. |
+| H2 | 50 | 100 | Có cả `get_status` và `get_incident_details`, không có mechanical violation. |
+| H6 | 60 | 100 | Status step 1, incident đầu step 2, incident gộp step 3. |
+
+Artifacts chạy tập trung: `eval_results_round2_H1.json`, `eval_results_round2_H2.json`,
+`eval_results_round2_H6.json` và logs tương ứng; không tự stage chúng.
+
+### Cấu hình và tái hiện
+
+Giữ provider/model agent và judge `gemini` / `gemini-3.5-flash-lite`, snapshot,
+`max_steps=8`, `workers=1`, pacing 6 giây/request. Bản ghi cấu hình và hash các file cần bảo toàn:
+`logs/eval_round2_config.json`.
+
+```powershell
+$env:PYTHONUTF8 = '1'
+# Nạp GEMINI_API_KEY vào môi trường, không ghi key vào file tracked.
+python -m unittest discover -s tests -v
+python logs/run_evals_paced.py --provider gemini --model gemini-3.5-flash-lite --judge-provider gemini --judge-model gemini-3.5-flash-lite --max-steps 8 --case H1 --output eval_results_round2_H1.json
+# Tương tự cho H2, H6 trước khi chạy đủ bộ:
+python logs/run_evals_paced.py --provider gemini --model gemini-3.5-flash-lite --judge-provider gemini --judge-model gemini-3.5-flash-lite --max-steps 8 --output eval_round2_after.json
+```
+
+### Kết quả đủ bộ vòng 2
+
+`eval_round2_after.json` chấm đủ **22/22**, tất cả runs `completed`, không có unscored/max_steps.
+`config` khớp baseline. Điểm **94.09 → 97.27**, tăng **3.18**.
+
+| Chỉ số | Baseline vòng 2 | Sau vòng 2 |
+|---|---:|---:|
+| H1 | 60 | 100 |
+| H2 | 50 | 100 |
+| H6 | 60 | 100 |
+| E3 | 100 | 55 |
+| H7 | 100 | 85 |
+| Agent model calls | 54 | 69 |
+| Tool calls | 37 | 50 |
+| Validation events | 5 | 9 |
+| Case thiếu URL incident đã đọc | 0 | 0 |
+| Agent prompt tokens | 47,973 | 94,271 |
+| Agent completion tokens | 13,689 | 16,885 |
+| Agent total tokens | 61,662 | 111,156 |
+| Judge total tokens | 42,334 | 49,954 |
+
+Trace trong báo cáo đủ bộ xác nhận:
+
+- **H1:** step 1 đọc `h02n9572mx9y` và `yaa0witbl2me`; step 2 đọc `xr3myzj7ms51`.
+  Không chỉ gọi thêm lượt để thỏa mechanical check: nội dung incident liên quan đã được lấy thật.
+- **H2:** step 1 gọi `get_status(github, Actions)`; step 2 đọc incident `t89g2q1800fr`.
+  Answer bác bỏ khẳng định outage từ incident cũ, phân biệt snapshot và lịch sử.
+- **H6:** step 1 lấy status và incident đầu; step 2 đọc incident gộp `xr3myzj7ms51`.
+  Không còn mechanical violations trên cả ba case mục tiêu.
+
+Các case khác giữ 100, ngoại trừ hai trường hợp sau:
+
+- **E3 — regression thực về truy xuất:** trace chỉ gọi `get_status` với component
+  `Cloudflare Spectrum`. Tool tìm chuỗi nên không khớp tên `Spectrum`, trả rỗng;
+  model dừng mà không thử lại tên component ngắn hơn. Answer có nêu giới hạn, không bịa outage
+  hay quan hệ nhân quả, nhưng bỏ sót incident Phoenix mà câu hỏi cần.
+  Không phải fixtures sai; chưa sửa ở vòng này. Hướng tiếp theo: chuẩn hóa/bỏ tiền tố provider
+  trong query và thử lại có giới hạn khi kết quả tìm chuỗi rỗng, dựa trên evidence.
+- **H7 — điểm judge mâu thuẫn với evidence:** answer nói Cloudflare chưa xác minh do timeout,
+  không khẳng định operational/outage và vẫn dẫn nguồn GitHub. Judge cũng ghi nhận xử lý đúng,
+  nhưng trả `boundaries=0` cùng các dimension khác tối đa, khiến tổng còn 85.
+  Giữ nguyên điểm 85 và report gốc; không sửa grading, không chấm lại để chọn điểm cao.
+  Reviewer cần đối chiếu answer/trace; không coi đây là bằng chứng lỗi bịa trạng thái tái xuất hiện.
+
+Agent tokens tăng **49,494 (~80.3%)**, calls tăng 15; tổng agent + judge tăng
+**103,996 → 161,110 (~54.9%)**. Có nhiều lượt/tool calls và nhiều nội dung incident được đọc hơn;
+đây là đánh đổi đáng kể, không kết luận prompt mới tối ưu chi phí. Usage không cung cấp tiền thực tế
+nên không quy ra USD. Các số trên không gồm ba lượt chạy tập trung.
+
+Chi tiết machine-readable: `logs/eval_round2_comparison.json`; log đủ bộ:
+`logs/eval_round2_after.log`. Không có lượt full eval vòng 2 nào khác để chọn điểm tốt nhất.
+
+### Giới hạn và bàn giao
+
+Prompt không phải một ràng buộc bằng code; thành công ở cả lượt tập trung và full eval vẫn chưa
+chứng minh độ ổn định qua nhiều lần chạy. E3 còn lỗi query; H7 cần reviewer kiểm tra điểm judge;
+chi phí token tăng đáng kể. Tests cũ vẫn pass, validation nguồn vẫn hoạt động, bài bonus chưa làm.
+Không tăng max steps, không đổi model hoặc chọn lại điểm tốt nhất. Chờ Antigravity Final QA trước
+khi stage/commit vòng 2; không push.
