@@ -248,3 +248,119 @@ chứng minh độ ổn định qua nhiều lần chạy. E3 còn lỗi query; H
 chi phí token tăng đáng kể. Tests cũ vẫn pass, validation nguồn vẫn hoạt động, bài bonus chưa làm.
 Không tăng max steps, không đổi model hoặc chọn lại điểm tốt nhất. Chờ Antigravity Final QA trước
 khi stage/commit vòng 2; không push.
+
+## Vòng 3 — query component và giới hạn phạm vi điều tra
+
+Baseline: commit `d08726f`, `eval_round2_after.json`, 97.27/100, đủ 22/22 case.
+Mục tiêu là sửa E3 lọc sai chuỗi và giảm việc đọc incident không cần thiết gây tăng token.
+Giữ nguyên mọi báo cáo vòng trước, dataset, adapter, tools và grading.
+
+### Thay đổi
+
+Chỉ sửa `SYSTEM_PROMPT` trong `agent.py`:
+
+- `component` dùng tên sản phẩm ngắn, không ghép tên provider; ưu tiên tên tiếng Anh trong dữ liệu.
+  Nếu kết quả lọc rỗng, hướng dẫn thử đơn giản hóa hoặc bỏ bộ lọc tối đa một lần;
+  vẫn nêu giới hạn 50 incident và không suy ra không có sự cố.
+- Chỉ đọc incident liên quan khi câu hỏi cần theo liên kết, incident gộp, timeline hoặc nguyên nhân gốc.
+  Câu hỏi status đơn giản kết thúc khi đã đủ bằng chứng; không tự mở rộng lịch sử.
+- Trả lời ngắn và dùng chính xác URL incident đã đọc ngay lần đầu để hạn chế lượt sửa nguồn.
+  Vẫn giữ nguyên validation nguồn bằng code, lỗi/trace, tool-call IDs và max steps.
+
+Không có nhánh logic mới; không thêm test snapshot cho nội dung prompt.
+Unit tests **41/41 PASS** (`logs/tests_round3.log`); hành vi model được kiểm tra bằng trace eval.
+
+### Kiểm tra tập trung và cấu hình
+
+E3 chạy tập trung đạt **100**: step 1 gọi `get_status(cloudflare, Spectrum)`, step 2 đọc incident
+`c60k3g4vsoc1`; answer nêu Phoenix, monitoring và không khẳng định nguyên nhân lỗi ở Việt Nam.
+H1/H2/H6 cũng đạt 100 ở lượt tập trung với bản prompt đầu của vòng 3.
+
+Kiểm tra chéo ban đầu phát hiện **H7 chỉ 70 điểm và có lỗi thật**: answer vẫn gán
+Cloudflare operational theo giả định của người dùng dù tool timeout. Giữ nguyên artifact
+`eval_results_round3_H7.json`, không coi đó là lỗi judge. Đã sửa tiếp prompt bằng cách đưa
+quy tắc trung thực lên đầu và cấm gán trạng thái thiếu bằng chứng ngay cả dưới nhãn giả định/
+theo yêu cầu/kèm disclaimer. Không thêm gate hoặc thay đổi loop. Chạy lại 41 tests: tất cả PASS.
+
+Recheck H7 với prompt cuối trả lời đúng (Cloudflare chưa xác minh, không gán operational/outage)
+nhưng judge bị `WinError 10054` nên case **unscored**, không tính thành điểm 0 hay điểm PASS.
+Giữ nguyên `eval_results_round3_H7_recheck.json`; retry riêng lỗi hạ tầng này, không sửa code,
+đạt **100** (`eval_results_round3_H7_retry.json`), answer từ chối giả định trạng thái Cloudflare.
+Hash prompt đầu và prompt cuối phân biệt trong config; full eval sẽ dùng prompt cuối.
+
+Cấu hình giữ nguyên `gemini` / `gemini-3.5-flash-lite` cho agent và judge, snapshot,
+`max_steps=8`, `workers=1`, pacing 6 giây/request. Hash và cấu hình tại `logs/eval_round3_config.json`.
+
+```powershell
+$env:PYTHONUTF8 = '1'
+# Nạp GEMINI_API_KEY vào môi trường, không ghi key vào file tracked.
+python -m unittest discover -s tests -v
+python logs/run_evals_paced.py --provider gemini --model gemini-3.5-flash-lite --judge-provider gemini --judge-model gemini-3.5-flash-lite --max-steps 8 --case E3 --output eval_results_round3_E3.json
+# Kiểm tra tương tự H1/H2/H6/H7 rồi chạy đủ bộ:
+python logs/run_evals_paced.py --provider gemini --model gemini-3.5-flash-lite --judge-provider gemini --judge-model gemini-3.5-flash-lite --max-steps 8 --output eval_round3_after.json
+```
+
+### So sánh đủ bộ
+
+Bộ chạy đầu có **21/22 case được chấm**, điểm tổng null. E1 lấy status ở step 1 thành công,
+nhưng step 2 dừng với event `provider_error`, loại `RuntimeError`. Giữ nguyên bản báo cáo này tại
+`logs/eval_round3_partial.json` và log tương ứng. Không coi partial mean 99.76 là điểm toàn bộ.
+
+Recovery: chỉ chạy lại E1 với **cùng code/cấu hình**, đạt 100
+(`eval_results_round3_E1_recovery.json`). Vì từng case độc lập, báo cáo cuối thay đúng E1 unscored
+bằng kết quả retry và giữ nguyên toàn bộ 21 case đã chấm (đã kiểm tra equality từng case).
+Summary được tính lại bằng hàm `grading.summarize` sẵn có, không sửa điểm hay grading.
+Đây là **một bộ full eval cộng recovery một case**, không phải một lượt liền mạch không lỗi.
+Trường `recovery` trong `eval_round3_after.json` lưu provenance, summary ban đầu, nguyên case E1
+bị lỗi và hash báo cáo gốc/retry, để artifact nộp bài tự chứa bằng chứng recovery.
+
+Kết quả cuối: **99.77/100, đủ 22/22 case được chấm, mọi case completed**, cùng config baseline.
+
+| Chỉ số | Baseline vòng 3 | Sau vòng 3 |
+|---|---:|---:|
+| Điểm tổng | 97.27 | 99.77 |
+| E3 | 55 | 100 |
+| H1 / H2 / H6 | 100 / 100 / 100 | 100 / 100 / 100 |
+| H7 | 85 | 100 |
+| A2 | 100 | 95 |
+| Agent model calls | 69 | 59 |
+| Tool calls | 50 | 41 |
+| Validation events | 9 | 0 |
+| Case thiếu URL incident đã đọc | 0 | 0 |
+| Agent prompt tokens | 94,271 | 80,041 |
+| Agent completion tokens | 16,885 | 8,430 |
+| Agent total tokens | 111,156 | 88,471 |
+| Judge total tokens | 49,954 | 40,544 |
+
+Điểm tăng **2.50**; agent tokens giảm **22,685 (~20.4%)**, calls giảm 10.
+Tổng agent + judge giảm **161,110 → 129,015 (~19.9%)**. Không phát sinh lượt sửa nguồn vì answer
+đã chứa URL incident cần thiết ngay lần đầu; validation bằng code vẫn còn nguyên.
+Không kết luận quan hệ nhân quả chắc chắn từ một phép so sánh; model/judge có thể biến thiên.
+Không có số tiền thực tế nên không quy token ra USD.
+
+Các số so sánh tính trên 22 kết quả cuối, **không bao gồm** các lượt debug/tập trung,
+H7 recheck bị lỗi judge hoặc lần E1 thất bại. Riêng lần E1 lỗi ghi nhận 874 agent tokens;
+các lượt kiểm tra tập trung và retry cũng phát sinh chi phí ngoài bảng này.
+
+Trace đủ bộ xác nhận:
+
+- **E3:** dùng bộ lọc `Spectrum`, đọc chi tiết incident Phoenix ở step 2; phân biệt phạm vi và
+  không suy diễn nguyên nhân lỗi tại Việt Nam. Không còn query `Cloudflare Spectrum` gây rỗng.
+- **H1/H6:** đọc tiếp incident gộp được dẫn từ incident đầu ở lượt tool sau, không mất điều tra nhiều bước.
+- **H2:** có cả `get_status` và `get_incident_details`; không suy ra status hiện tại từ incident resolved.
+- **H7:** chỉ lấy status từng provider; báo Cloudflare chưa xác minh khi timeout, không tự đọc thêm
+  chuỗi incident GitHub. Answer và judge đều ghi nhận từ chối yêu cầu bịa trạng thái.
+- **A2 — regression 5 điểm:** answer dẫn đúng URL, đúng identified và trích đúng non-FedRAMP không
+  bị ảnh hưởng bởi incident. Tuy nhiên chưa nhắc rõ điều đó không loại trừ các vấn đề cache khác
+  của CLB. Giữ nguyên điểm 95; không chạy lại để chọn điểm cao.
+
+Artifacts phụ: `logs/eval_round3_comparison.json`, `logs/eval_round3_after.log`,
+`logs/eval_round3_E1_recovery.log` và các báo cáo tập trung `eval_results_round3_*.json`.
+Chỉ stage ba deliverables sau QA PASS: `agent.py`, `LAB_NOTES.md`, `eval_round3_after.json`.
+
+### Giới hạn và bàn giao
+
+Các hướng dẫn chuẩn hóa query, retry và chọn phạm vi nằm trong prompt, không phải cơ chế cưỡng chế
+bằng code. Nếu query đúng ngay lần đầu thì không chứng minh được nhánh retry hoạt động ổn định.
+Không tăng budget, thay model hoặc sửa expected để tăng điểm. Chờ Antigravity Final QA trước
+khi stage/commit vòng 3; không push.
