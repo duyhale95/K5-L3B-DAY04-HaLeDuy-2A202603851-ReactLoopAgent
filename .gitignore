@@ -3,3 +3,8 @@
 __pycache__/
 *.pyc
 eval_results*.json
+
+# Local evaluation artifacts
+/logs/
+/eval_e2.json
+/eval_round*_after.json
