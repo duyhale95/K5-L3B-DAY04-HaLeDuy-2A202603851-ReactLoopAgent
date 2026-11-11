@@ -1,0 +1,17 @@
+test_all_provider_adapters_form_requests_without_keys_leaking (test_lab.FullTrajectoryTests.test_all_provider_adapters_form_requests_without_keys_leaking) ... ok
+test_two_tools_and_final_with_real_snapshot (test_lab.FullTrajectoryTests.test_two_tools_and_final_with_real_snapshot) ... ok
+test_invalid_json_sent_back_to_model (test_lab.LoopTests.test_invalid_json_sent_back_to_model) ... ok
+test_max_steps (test_lab.LoopTests.test_max_steps) ... ok
+test_model_truncation_is_not_completed (test_lab.LoopTests.test_model_truncation_is_not_completed) ... ok
+test_multiple_tool_calls (test_lab.LoopTests.test_multiple_tool_calls) ... ok
+test_tool_result_is_returned_with_id (test_lab.LoopTests.test_tool_result_is_returned_with_id) ... ok
+test_anthropic_groups_results (test_lab.ProviderTests.test_anthropic_groups_results) ... ok
+test_components_empty_search_uses_title (test_lab.ToolsTests.test_components_empty_search_uses_title) ... ok
+test_errors_are_observations (test_lab.ToolsTests.test_errors_are_observations) ... ok
+test_fedramp_scope_present (test_lab.ToolsTests.test_fedramp_scope_present) ... ok
+test_status_filters_and_resolved (test_lab.ToolsTests.test_status_filters_and_resolved) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.059s
+
+OK

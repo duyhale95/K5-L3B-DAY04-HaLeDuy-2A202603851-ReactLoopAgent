@@ -1,0 +1,9 @@
+test_non_object_json_is_invalid_arguments (test_agent_errors.AgentErrorTests.test_non_object_json_is_invalid_arguments) ... ok
+test_provider_exception_is_safe_and_retains_usage (test_agent_errors.AgentErrorTests.test_provider_exception_is_safe_and_retains_usage) ... ok
+test_tool_exception_is_observation_and_model_can_recover (test_agent_errors.AgentErrorTests.test_tool_exception_is_observation_and_model_can_recover) ... ok
+test_unexpected_finish_is_error (test_agent_errors.AgentErrorTests.test_unexpected_finish_is_error) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.012s
+
+OK
